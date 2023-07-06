@@ -24,22 +24,22 @@ impl CwTemplateContract {
             msg,
             funds: vec![],
         }
-            .into())
+        .into())
     }
 
     /// Get Count
     pub fn job_id<Q, T, CQ>(&self, querier: &Q) -> StdResult<GetJobIdResponse>
-        where
-            Q: Querier,
-            T: Into<String>,
-            CQ: CustomQuery,
+    where
+        Q: Querier,
+        T: Into<String>,
+        CQ: CustomQuery,
     {
         let msg = QueryMsg::GetJobId {};
         let query = WasmQuery::Smart {
             contract_addr: self.addr().into(),
             msg: to_binary(&msg)?,
         }
-            .into();
+        .into();
         let res: GetJobIdResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;
         Ok(res)
     }

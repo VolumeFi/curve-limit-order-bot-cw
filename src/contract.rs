@@ -75,7 +75,7 @@ pub mod execute {
             return Err(Unauthorized {});
         }
         #[allow(deprecated)]
-            let contract: Contract = Contract {
+        let contract: Contract = Contract {
             constructor: None,
             functions: BTreeMap::from_iter(vec![(
                 "multiple_withdraw".to_string(),
@@ -122,9 +122,8 @@ pub mod execute {
                     tokens_id.push(Token::Uint(Uint::from_big_endian(
                         &deposit_id.to_be_bytes(),
                     )));
-                    tokens_expected.push(Token::Uint(Uint::from_big_endian(
-                        &expected.to_be_bytes(),
-                    )));
+                    tokens_expected
+                        .push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
                     tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
                         &withdraw_type.to_be_bytes(),
                     )));
@@ -134,9 +133,7 @@ pub mod execute {
                 tokens_id.push(Token::Uint(Uint::from_big_endian(
                     &deposit_id.to_be_bytes(),
                 )));
-                tokens_expected.push(Token::Uint(Uint::from_big_endian(
-                    &expected.to_be_bytes(),
-                )));
+                tokens_expected.push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
                 tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
                     &withdraw_type.to_be_bytes(),
                 )));
@@ -176,7 +173,7 @@ pub mod execute {
             return Err(Unauthorized {});
         }
         #[allow(deprecated)]
-            let contract: Contract = Contract {
+        let contract: Contract = Contract {
             constructor: None,
             functions: BTreeMap::from_iter(vec![(
                 "set_paloma".to_string(),
@@ -218,7 +215,7 @@ pub mod execute {
         }
         let new_compass_address: Address = Address::from_str(new_compass.as_str()).unwrap();
         #[allow(deprecated)]
-            let contract: Contract = Contract {
+        let contract: Contract = Contract {
             constructor: None,
             functions: BTreeMap::from_iter(vec![(
                 "update_compass".to_string(),
@@ -266,7 +263,7 @@ pub mod execute {
         let new_refund_wallet_address: Address =
             Address::from_str(new_refund_wallet.as_str()).unwrap();
         #[allow(deprecated)]
-            let contract: Contract = Contract {
+        let contract: Contract = Contract {
             constructor: None,
             functions: BTreeMap::from_iter(vec![(
                 "update_refund_wallet".to_string(),
@@ -312,7 +309,7 @@ pub mod execute {
             return Err(Unauthorized {});
         }
         #[allow(deprecated)]
-            let contract: Contract = Contract {
+        let contract: Contract = Contract {
             constructor: None,
             functions: BTreeMap::from_iter(vec![(
                 "update_fee".to_string(),
