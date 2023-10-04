@@ -1,0 +1,1 @@
+3be29828773a1eea78cf89ea77cc09d49a67d8bfce23d878e64b0ee98a1e6ca3  /target/wasm32-unknown-unknown/release/curve_limit_order_bot_cw.wasm

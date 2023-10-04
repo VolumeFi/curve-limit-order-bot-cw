@@ -6,9 +6,8 @@ use cosmwasm_std::{
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::error::ContractError::AllPending;
 use crate::msg::{ExecuteMsg, GetJobIdResponse, InstantiateMsg, PalomaMsg, QueryMsg};
-use crate::state::{State, RETRY_DELAY, STATE, WITHDRAW_TIMESTAMP};
+use crate::state::{State, STATE};
 use cosmwasm_std::CosmosMsg;
 use ethabi::{Contract, Function, Param, ParamType, StateMutability, Token, Uint};
 use std::collections::BTreeMap;
@@ -30,7 +29,6 @@ pub fn instantiate(
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
-    RETRY_DELAY.save(deps.storage, &msg.retry_delay)?;
     Ok(Response::new()
         .add_attribute("method", "instantiate")
         .add_attribute("owner", info.sender)
@@ -54,6 +52,12 @@ pub fn execute(
             execute::update_refund_wallet(deps, info, new_refund_wallet)
         }
         ExecuteMsg::UpdateFee { fee } => execute::update_fee(deps, info, fee),
+        ExecuteMsg::UpdateServiceFeeCollector {
+            new_service_fee_collector,
+        } => execute::update_service_fee_collector(deps, info, new_service_fee_collector),
+        ExecuteMsg::UpdateServiceFee { new_service_fee } => {
+            execute::update_service_fee(deps, info, new_service_fee)
+        }
     }
 }
 
@@ -66,7 +70,7 @@ pub mod execute {
 
     pub fn withdraw(
         deps: DepsMut,
-        env: Env,
+        _env: Env,
         info: MessageInfo,
         deposits: Vec<Deposit>,
     ) -> Result<Response<PalomaMsg>, ContractError> {
@@ -112,56 +116,36 @@ pub mod execute {
         let mut tokens_id: Vec<Token> = vec![];
         let mut tokens_expected: Vec<Token> = vec![];
         let mut tokens_withdraw_type: Vec<Token> = vec![];
-        let retry_delay: u64 = RETRY_DELAY.load(deps.storage)?;
         for deposit in deposits {
             let deposit_id = deposit.deposit_id;
             let expected = deposit.expected;
             let withdraw_type = deposit.withdraw_type;
-            if let Some(timestamp) = WITHDRAW_TIMESTAMP.may_load(deps.storage, deposit_id)? {
-                if timestamp.plus_seconds(retry_delay).lt(&env.block.time) {
-                    tokens_id.push(Token::Uint(Uint::from_big_endian(
-                        &deposit_id.to_be_bytes(),
-                    )));
-                    tokens_expected
-                        .push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
-                    tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
-                        &withdraw_type.to_be_bytes(),
-                    )));
-                    WITHDRAW_TIMESTAMP.save(deps.storage, deposit_id, &env.block.time)?;
-                }
-            } else {
-                tokens_id.push(Token::Uint(Uint::from_big_endian(
-                    &deposit_id.to_be_bytes(),
-                )));
-                tokens_expected.push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
-                tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
-                    &withdraw_type.to_be_bytes(),
-                )));
-                WITHDRAW_TIMESTAMP.save(deps.storage, deposit_id, &env.block.time)?;
-            }
+            tokens_id.push(Token::Uint(Uint::from_big_endian(
+                &deposit_id.to_be_bytes(),
+            )));
+            tokens_expected.push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
+            tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
+                &withdraw_type.to_be_bytes(),
+            )));
         }
 
-        if tokens_id.is_empty() {
-            Err(AllPending {})
-        } else {
-            let tokens = vec![
-                Token::Array(tokens_id),
-                Token::Array(tokens_expected),
-                Token::Array(tokens_withdraw_type),
-            ];
-            Ok(Response::new()
-                .add_message(CosmosMsg::Custom(PalomaMsg {
-                    job_id: state.job_id,
-                    payload: Binary(
-                        contract
-                            .function("multiple_withdraw")
-                            .unwrap()
-                            .encode_input(tokens.as_slice())
-                            .unwrap(),
-                    ),
-                }))
-                .add_attribute("action", "multiple_withdraw"))
-        }
+        let tokens = vec![
+            Token::Array(tokens_id),
+            Token::Array(tokens_expected),
+            Token::Array(tokens_withdraw_type),
+        ];
+        Ok(Response::new()
+            .add_message(CosmosMsg::Custom(PalomaMsg {
+                job_id: state.job_id,
+                payload: Binary(
+                    contract
+                        .function("multiple_withdraw")
+                        .unwrap()
+                        .encode_input(tokens.as_slice())
+                        .unwrap(),
+                ),
+            }))
+            .add_attribute("action", "multiple_withdraw"))
     }
 
     pub fn set_paloma(
@@ -343,6 +327,102 @@ pub mod execute {
                 ),
             }))
             .add_attribute("action", "update_fee"))
+    }
+
+    pub(crate) fn update_service_fee_collector(
+        deps: DepsMut,
+        info: MessageInfo,
+        new_service_fee_collector: String,
+    ) -> Result<Response<PalomaMsg>, ContractError> {
+        let state = STATE.load(deps.storage)?;
+        if state.owner != info.sender {
+            return Err(Unauthorized {});
+        }
+        let new_service_fee_collector_address: Address =
+            Address::from_str(new_service_fee_collector.as_str()).unwrap();
+        #[allow(deprecated)]
+        let contract: Contract = Contract {
+            constructor: None,
+            functions: BTreeMap::from_iter(vec![(
+                "update_service_fee_collector".to_string(),
+                vec![Function {
+                    name: "update_service_fee_collector".to_string(),
+                    inputs: vec![Param {
+                        name: "new_service_fee_collector".to_string(),
+                        kind: ParamType::Address,
+                        internal_type: None,
+                    }],
+                    outputs: Vec::new(),
+                    constant: None,
+                    state_mutability: StateMutability::NonPayable,
+                }],
+            )]),
+            events: BTreeMap::new(),
+            errors: BTreeMap::new(),
+            receive: false,
+            fallback: false,
+        };
+
+        Ok(Response::new()
+            .add_message(CosmosMsg::Custom(PalomaMsg {
+                job_id: state.job_id,
+                payload: Binary(
+                    contract
+                        .function("update_service_fee_collector")
+                        .unwrap()
+                        .encode_input(&[Token::Address(new_service_fee_collector_address)])
+                        .unwrap(),
+                ),
+            }))
+            .add_attribute("action", "update_service_fee_collector"))
+    }
+
+    pub(crate) fn update_service_fee(
+        deps: DepsMut,
+        info: MessageInfo,
+        new_service_fee: Uint256,
+    ) -> Result<Response<PalomaMsg>, ContractError> {
+        let state = STATE.load(deps.storage)?;
+        if state.owner != info.sender {
+            return Err(Unauthorized {});
+        }
+        #[allow(deprecated)]
+        let contract: Contract = Contract {
+            constructor: None,
+            functions: BTreeMap::from_iter(vec![(
+                "update_service_fee".to_string(),
+                vec![Function {
+                    name: "update_service_fee".to_string(),
+                    inputs: vec![Param {
+                        name: "new_service_fee".to_string(),
+                        kind: ParamType::Uint(256),
+                        internal_type: None,
+                    }],
+                    outputs: Vec::new(),
+                    constant: None,
+                    state_mutability: StateMutability::NonPayable,
+                }],
+            )]),
+            events: BTreeMap::new(),
+            errors: BTreeMap::new(),
+            receive: false,
+            fallback: false,
+        };
+
+        Ok(Response::new()
+            .add_message(CosmosMsg::Custom(PalomaMsg {
+                job_id: state.job_id,
+                payload: Binary(
+                    contract
+                        .function("update_service_fee")
+                        .unwrap()
+                        .encode_input(&[Token::Uint(Uint::from_big_endian(
+                            &new_service_fee.to_be_bytes(),
+                        ))])
+                        .unwrap(),
+                ),
+            }))
+            .add_attribute("action", "update_service_fee"))
     }
 }
 
