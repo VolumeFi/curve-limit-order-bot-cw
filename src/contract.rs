@@ -1,13 +1,13 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint256,
+    to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint256,
 };
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, GetJobIdResponse, InstantiateMsg, PalomaMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::msg::{ExecuteMsg, GetJobIdResponse, InstantiateMsg, Metadata, PalomaMsg, QueryMsg};
+use crate::state::{State, RETRY_DELAY, STATE, WITHDRAW_TIMESTAMP};
 use cosmwasm_std::CosmosMsg;
 use ethabi::{Contract, Function, Param, ParamType, StateMutability, Token, Uint};
 use std::collections::BTreeMap;
@@ -26,6 +26,10 @@ pub fn instantiate(
     let state = State {
         job_id: msg.job_id.clone(),
         owner: info.sender.clone(),
+        metadata: Metadata {
+            creator: msg.creator,
+            signers: msg.signers,
+        },
     };
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     STATE.save(deps.storage, &state)?;
@@ -64,13 +68,13 @@ pub fn execute(
 pub mod execute {
     use super::*;
     use crate::msg::Deposit;
-    use crate::ContractError::Unauthorized;
+    use crate::ContractError::{AllPending, Unauthorized};
     use ethabi::Address;
     use std::str::FromStr;
 
     pub fn withdraw(
         deps: DepsMut,
-        _env: Env,
+        env: Env,
         info: MessageInfo,
         deposits: Vec<Deposit>,
     ) -> Result<Response<PalomaMsg>, ContractError> {
@@ -116,36 +120,57 @@ pub mod execute {
         let mut tokens_id: Vec<Token> = vec![];
         let mut tokens_expected: Vec<Token> = vec![];
         let mut tokens_withdraw_type: Vec<Token> = vec![];
+        let retry_delay: u64 = RETRY_DELAY.load(deps.storage)?;
         for deposit in deposits {
             let deposit_id = deposit.deposit_id;
             let expected = deposit.expected;
             let withdraw_type = deposit.withdraw_type;
-            tokens_id.push(Token::Uint(Uint::from_big_endian(
-                &deposit_id.to_be_bytes(),
-            )));
-            tokens_expected.push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
-            tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
-                &withdraw_type.to_be_bytes(),
-            )));
+            if let Some(timestamp) = WITHDRAW_TIMESTAMP.may_load(deps.storage, deposit_id)? {
+                if timestamp.plus_seconds(retry_delay).lt(&env.block.time) {
+                    tokens_id.push(Token::Uint(Uint::from_big_endian(
+                        &deposit_id.to_be_bytes(),
+                    )));
+                    tokens_expected
+                        .push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
+                    tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
+                        &withdraw_type.to_be_bytes(),
+                    )));
+                    WITHDRAW_TIMESTAMP.save(deps.storage, deposit_id, &env.block.time)?;
+                }
+            } else {
+                tokens_id.push(Token::Uint(Uint::from_big_endian(
+                    &deposit_id.to_be_bytes(),
+                )));
+                tokens_expected.push(Token::Uint(Uint::from_big_endian(&expected.to_be_bytes())));
+                tokens_withdraw_type.push(Token::Uint(Uint::from_big_endian(
+                    &withdraw_type.to_be_bytes(),
+                )));
+                WITHDRAW_TIMESTAMP.save(deps.storage, deposit_id, &env.block.time)?;
+            }
         }
 
-        let tokens = vec![
-            Token::Array(tokens_id),
-            Token::Array(tokens_expected),
-            Token::Array(tokens_withdraw_type),
-        ];
-        Ok(Response::new()
-            .add_message(CosmosMsg::Custom(PalomaMsg {
-                job_id: state.job_id,
-                payload: Binary(
-                    contract
-                        .function("multiple_withdraw")
-                        .unwrap()
-                        .encode_input(tokens.as_slice())
-                        .unwrap(),
-                ),
-            }))
-            .add_attribute("action", "multiple_withdraw"))
+        if tokens_id.is_empty() {
+            Err(AllPending {})
+        } else {
+            let tokens = vec![
+                Token::Array(tokens_id),
+                Token::Array(tokens_expected),
+                Token::Array(tokens_withdraw_type),
+            ];
+            Ok(Response::new()
+                .add_message(CosmosMsg::Custom(PalomaMsg {
+                    job_id: state.job_id,
+                    payload: Binary(
+                        contract
+                            .function("multiple_withdraw")
+                            .unwrap()
+                            .encode_input(tokens.as_slice())
+                            .unwrap(),
+                    ),
+                    metadata: state.metadata,
+                }))
+                .add_attribute("action", "multiple_withdraw"))
+        }
     }
 
     pub fn set_paloma(
@@ -184,6 +209,7 @@ pub mod execute {
                         .encode_input(&[])
                         .unwrap(),
                 ),
+                metadata: state.metadata,
             }))
             .add_attribute("action", "set_paloma"))
     }
@@ -231,6 +257,7 @@ pub mod execute {
                         .encode_input(&[Token::Address(new_compass_address)])
                         .unwrap(),
                 ),
+                metadata: state.metadata,
             }))
             .add_attribute("action", "update_compass"))
     }
@@ -279,6 +306,7 @@ pub mod execute {
                         .encode_input(&[Token::Address(new_refund_wallet_address)])
                         .unwrap(),
                 ),
+                metadata: state.metadata,
             }))
             .add_attribute("action", "update_refund_wallet"))
     }
@@ -325,6 +353,7 @@ pub mod execute {
                         .encode_input(&[Token::Uint(Uint::from_big_endian(&fee.to_be_bytes()))])
                         .unwrap(),
                 ),
+                metadata: state.metadata,
             }))
             .add_attribute("action", "update_fee"))
     }
@@ -373,6 +402,7 @@ pub mod execute {
                         .encode_input(&[Token::Address(new_service_fee_collector_address)])
                         .unwrap(),
                 ),
+                metadata: state.metadata,
             }))
             .add_attribute("action", "update_service_fee_collector"))
     }
@@ -421,6 +451,7 @@ pub mod execute {
                         ))])
                         .unwrap(),
                 ),
+                metadata: state.metadata,
             }))
             .add_attribute("action", "update_service_fee"))
     }
@@ -429,7 +460,7 @@ pub mod execute {
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetJobId {} => to_binary(&query::get_job_id(deps)?),
+        QueryMsg::GetJobId {} => to_json_binary(&query::get_job_id(deps)?),
     }
 }
 
